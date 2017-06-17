@@ -3,28 +3,33 @@ NULL
 
 # Drivers ----------------------------------------------------------------
 
-#' @rdname SQLServerDriver-class
-#' @export
-
-setMethod('dbGetInfo', 'SQLServerDriver', definition = function (dbObj, ...) {
-  list(name = 'RSQLServer (jTDS)',
-    driver.version = rJava::.jcall(dbObj@jdrv, "S", "getVersion"))
-})
-
-#' @rdname SQLServerDriver-class
-#' @export
-
-setMethod("show", "SQLServerDriver", definition = function (object) {
-  cat("<SQLServerDriver>\n")
-})
-
-#' Connect to/disconnect from a SQL Server database.
+#' SQLServerDriver class and methods
 #'
+#' \code{SQLServer()} creates a \code{SQLServerDriver} object and is based on
+#' the jTDS driver while \code{dbConnect()} provides a convenient interface to
+#' connecting to a SQL Server database using this driver.
+#'
+#' @references
+#' \href{http://jtds.sourceforge.net/doc/net/sourceforge/jtds/jdbc/Driver.html}{jTDS API doc for Driver class}
+#' @examples
+#' \dontrun{
+#' SQLServer()
+#' }
+#' @rdname SQLServer
+#' @export
+
+SQLServer <- function () {
+  new("SQLServerDriver", jdrv = start_driver())
+}
+
+
 #' @param drv An objected of class \code{\linkS4class{SQLServerDriver}}, or an
-#' existing \code{\linkS4class{SQLServerConnection}}. If a connection,
-#' the connection will be cloned.
+#'   existing \code{\linkS4class{SQLServerConnection}}. If a connection, the
+#'   connection will be cloned.
 #' @template sqlserver-parameters
-#' @return a \code{\linkS4class{SQLServerConnection}}
+#' @return \code{SQLServer()} returns an object of class
+#'   \code{SQLServerDriver}; \code{dbConnect()} returns a
+#'   \code{\linkS4class{SQLServerConnection}} object.
 #' @examples
 #' # View sql.yaml file bundled in package
 #' file <- system.file("extdata", "sql.yaml", package = "RSQLServer")
@@ -44,12 +49,16 @@ setMethod("show", "SQLServerDriver", definition = function (object) {
 #' @export
 
 setMethod('dbConnect', "SQLServerDriver",
-  definition = function (drv, server, file = NULL, database = "",
-    type = "sqlserver", port = "", properties = list()) {
-    # Set default value for file
-    if (is.null(file)) {
-      file <- file.path(Sys.getenv("HOME"), "sql.yaml")
-    }
+  definition = function (drv, server, file = NULL, database = NULL,
+    type = NULL, port = NULL, properties = NULL) {
+
+    # Set default values for arguments
+    file <- file %||% file.path(Sys.getenv("HOME"), "sql.yaml")
+    database <- database %||% ""
+    type <- type %||% "sqlserver"
+    port <- port %||% ""
+    properties <- properties %||% list()
+
     # Use sql.yaml file if file is not missing. If so, then the paramaters
     # type, port and connection properties will be ignored and the
     # information in sql.yaml will be used instead.
@@ -69,18 +78,36 @@ setMethod('dbConnect', "SQLServerDriver",
       properties <- sd
     }
     url <- jtds_url(server, type, port, database, properties)
-    jc <- rJava::.jcall(drv@jdrv, "Ljava/sql/Connection;", "connect", url,
-      rJava::.jnew('java/util/Properties'))
-    new("SQLServerConnection", jc = jc, identifier.quote = drv@identifier.quote)
+    new("SQLServerConnection", jc = new_connection(drv, url))
   }
 )
 
+#' @rdname SQLServerDriver-class
+#' @export
+
+setMethod('dbGetInfo', 'SQLServerDriver', definition = function (dbObj, ...) {
+  list(name = 'RSQLServer (jTDS)',
+    # jTDS is a JDBC 3.0 driver. This can be determined by calling the
+    # getDriverVersion() method of the JtdsDatabaseMetaData class. But
+    # this method isn't defined for Driver class - so hard coded.
+    driver.version = numeric_version("3.0"),
+    client.version = driver_version(dbObj),
+    # Max connection defined server side rather than by driver.
+    max.connections = NA)
+})
+
+#' @rdname SQLServerDriver-class
+#' @export
+setMethod("dbUnloadDriver", "SQLServerDriver", function(drv, ...) TRUE)
+
+#' @rdname SQLServerDriver-class
+#' @export
+setMethod("dbIsValid", "SQLServerDriver", function(dbObj, ...) TRUE)
+
+
 # DBI methods inherited from DBI
 # dbDriver()
-#
-# DBI methods inherited from RJDBC
-# dbUnloadDriver()
-
+# show()
 
 # Connections ------------------------------------------------------------
 
@@ -89,25 +116,15 @@ setMethod('dbConnect', "SQLServerDriver",
 
 setMethod('dbGetInfo', 'SQLServerConnection',
   definition = function (dbObj, ...) {
-    meta <- rJava::.jcall(dbObj@jc, "Ljava/sql/DatabaseMetaData;",
-      "getMetaData")
-    list(db.product.name = rJava::.jcall(meta, "S", "getDatabaseProductName"),
-      db.version = rJava::.jcall(meta, "I", "getDatabaseMajorVersion"),
-      user = rJava::.jcall(meta, "S","getUserName"))
+    list(
+      username   = connection_info(dbObj, "username"),
+      host       = connection_info(dbObj, "host"),
+      port       = connection_info(dbObj, "port"),
+      dbname     = connection_info(dbObj, "dbname"),
+      db.version = connection_info(dbObj, "db.version")
+    )
   }
 )
-
-#' @rdname SQLServerConnection-class
-#' @export
-
-setMethod("show", "SQLServerConnection", definition = function (object) {
-  info <- dbGetInfo(object)
-  cat("<SQLServerConnection>\n")
-  cat(info$db.product.name, " ", info$db.version, "\n", sep = "")
-  if (!dbIsValid(object)) {
-    cat("  DISCONNECTED\n")
-  }
-})
 
 #' @rdname SQLServerConnection-class
 #' @export
@@ -116,200 +133,155 @@ setMethod('dbIsValid', 'SQLServerConnection', function (dbObj, ...) {
   !rJava::.jcall(dbObj@jc, "Z", "isClosed")
 })
 
-# Inherited from DBI:
-# dbQuoteString()
-# dbQuoteIdentifier()
-
-
 #' @rdname SQLServerConnection-class
-#' @importFrom methods callNextMethod
+#' @export
+
+setMethod("dbDisconnect", "SQLServerConnection", function (conn, ...) {
+  if (!dbIsValid(conn))  {
+    warning("The connection has already been closed")
+    FALSE
+  } else {
+    close_connection(conn)
+    TRUE
+  }
+})
+
+#' @param batch logical, indicates whether uploads (e.g., 'INSERT' or
+#'   'UPDATE') should be uploaded in batches, potentially much faster
+#'   than by individual rows (the default).
+#' @rdname SQLServerConnection-class
 #' @export
 
 setMethod("dbSendQuery", c("SQLServerConnection", "character"),
-  def = function (conn, statement, ..., list=NULL) {
-    new("SQLServerResult", callNextMethod())
+  def = function (conn, statement, params = NULL, ..., batch = FALSE) {
+    # Notes:
+    # 1. Unlike RJDBC, this method does **not** support executing stored procs
+    # or precompiled statements as these do not appear to be explicitly
+    # supported by any of the rstats-db backends.
+    # 2. This method is only responsible for sending SELECT statements which have
+    # to return ResultSet objects. To execute data definition or manipulation
+    # commands such as CREATE TABLE or UPDATE, use dbExecute instead.
+    assertthat::assert_that(assertthat::is.string(statement))
+    ps <- create_prepared_statement(conn, statement)
+    catch_exception(ps, "Unable to create prepared statement ", statement)
+    pre_res <- new("SQLServerPreResult", stat = ps)
+    # If parameterised and don't have params supplied, create a skeleton
+    # Result otherwise, create full thing
+    if (is_parameterised(ps) && is.null(params)) {
+      return(pre_res)
+    } else {
+      dbBind(pre_res, params, batch = batch)
+      jr <- execute_query(pre_res@stat)
+      catch_exception(jr, "Unable to retrieve result set for ", statement)
+      md <- rs_metadata(jr, FALSE)
+      catch_exception(md, "Unable to retrieve result set meta data for ",
+        statement, " in dbSendQuery")
+      return(new("SQLServerResult", pre_res, jr = jr, md = md,
+        rows_fetched = RowCounter(count = 0L)))
+    }
+})
+
+#' @rdname SQLServerConnection-class
+#' @export
+
+setMethod("dbSendStatement", c("SQLServerConnection", "character"),
+  function(conn, statement, params = NULL, ..., batch = FALSE) {
+    assertthat::assert_that(assertthat::is.string(statement),
+      is.null(params) || is.list(params))
+    if (length(params)) {
+      ps <- create_prepared_statement(conn, statement)
+      catch_exception(ps, "Unable to create statement: ", statement)
+      pre_res <- new("SQLServerPreResult", stat = ps)
+      if (batch) {
+        dbBind(pre_res, params, batch = TRUE)
+        ra <- sum(execute_batch(ps, check = TRUE))
+      } else {
+        # may benefit from 'batch=TRUE' or at least `dbWithTransaction(conn, ...)`
+        paramlen <- length(params[[1L]])
+        rets <- lapply(seq_len(paramlen), function(j) {
+          dbBind(pre_res, params = lapply(params, `[[`, j), batch = FALSE)
+          execute_update(ps, check = TRUE)
+        })
+        ra <- sum(unlist(rets))
+      }
+      on.exit(NULL) # remove dbRollBack
+    } else {
+      # assume "simple", no need to compile this statement
+      s <- create_statement(conn)
+      catch_exception(s, "Unable to create statement ", statement)
+      on.exit(close_statement(s))
+      ra <- execute_update(s, statement, check = TRUE)
+    }
+    res <- dbSendQuery(conn, paste("SELECT", ra, "AS ROWS_AFFECTED"))
+    new("SQLServerUpdateResult", res, rows_affected = ra)
+})
+
+#' @rdname SQLServerConnection-class
+#' @export
+
+dbSendUpdate <- function (conn, statement, ...) {
+  .Deprecated("dbExecute")
+  dbExecute(conn, statement)
+}
+
+#' @rdname SQLServerConnection-class
+#' @export
+setMethod("dbReadTable", c("SQLServerConnection", "character"),
+  function(conn, name, ...) {
+    sql <- paste("SELECT * FROM", dbQuoteIdentifier(conn, name))
+    dbGetQuery(conn, sql)
 })
 
 #' @rdname SQLServerConnection-class
 #' @export
 setMethod("dbDataType", c("SQLServerConnection", "ANY"),
   def = function (dbObj, obj, ...) {
-    # RJDBC method is too crude. See:
-    # https://github.com/s-u/RJDBC/blob/1b7ccd4677ea49a93d909d476acf34330275b9ad/R/class.R
-    # Based on db_data_type.MySQLConnection from dplyr
+    # GOING FROM R data type to SQL Server data type
+    # http://jtds.sourceforge.net/typemap.html
+    # https://msdn.microsoft.com/en-us/library/ms187752.aspx
     # https://msdn.microsoft.com/en-us/library/ms187752(v=sql.90).aspx
-    char_type <- function (x) {
-      n <- max(nchar(as.character(x)))
-      if (n <= 8000) {
-        paste0("varchar(", n, ")")
-      } else {
-        "text"
-      }
-    }
-    switch(class(obj)[1],
-      logical = "bit",
-      integer = "int",
-      numeric = "float",
-      factor =  char_type(obj),
-      character = char_type(obj),
-      # SQL Server does not have a date data type without time corresponding
-      # to R's Date class
-      Date = "datetime",
-      POSIXct = "datetime",
-      raw = "binary",
-      stop("Unknown class ", paste(class(obj), collapse = "/"), call. = FALSE)
+
+    if (is(obj, "data.frame")) return(data_frame_data_type(dbObj, obj))
+    if (is(obj, "AsIs")) return(as_is_type(obj, dbObj))
+    if (is.factor(obj)) return(char_type(obj, dbObj))
+    if (inherits(obj, "POSIXct")) return("DATETIME")
+    if (inherits(obj, "Date")) return(date_type(obj, dbObj))
+
+    switch(typeof(obj),
+      logical = "BIT",
+      integer = "INT",
+      double = "FLOAT",
+      raw = binary_type(obj, dbObj),
+      character = char_type(obj, dbObj),
+      list = binary_type(obj, dbObj),
+      stop("Unsupported type", call. = FALSE)
     )
   }
 )
 
-.fillStatementParameters <- function(s, l) {
-  # Modified from RJDBC
-  # https://github.com/s-u/RJDBC/blob/1b7ccd4677ea49a93d909d476acf34330275b9ad/R/class.R#L63
-  for (i in 1:length(l)) {
-    v <- l[[i]]
-    if (is.na(v)) { # map NAs to NULLs (courtesy of Axel Klenk)
-      sqlType <- rToJdbcType(class(v))
-      rJava::.jcall(s, "V", "setNull", i, as.integer(sqlType))
-    } else if (is.integer(v)) {
-      rJava::.jcall(s, "V", "setInt", i, v[1])
-    } else if (is.numeric(v)) {
-      rJava::.jcall(s, "V", "setDouble", i, as.double(v)[1])
-    } else if (is.logical(v)) {
-      rJava::.jcall(s, "V", "setBoolean", i, as.logical(v)[1])
-    } else if (lubridate::is.Date(v)) {
-      # as.POSIXlt sets time to UTC whereas as.POSIXct sets time to local
-      # timezone. The tz argument is ignored when a Date is passed to either
-      # function
-      milliseconds <- as.numeric(as.POSIXlt(v)[1]) * 1000
-      vdate <- rJava::.jnew("java/sql/Date", rJava::.jlong(milliseconds))
-      rJava::.jcall(s, "V", "setDate", i, vdate)
-    } else if (lubridate::is.POSIXct(v)) {
-      # as.integer converts POSIXct to seconds since epoch. Timestamp
-      # constructor needs milliseconds so multiply by 1000
-      # http://docs.oracle.com/javase/7/docs/api/java/sql/Timestamp.html
-      milliseconds <- as.numeric(as.POSIXct(v)[1]) * 1000
-      vtimestamp <- rJava::.jnew("java/sql/Timestamp",
-        rJava::.jlong(milliseconds))
-      rJava::.jcall(s, "V", "setTimestamp", i, vtimestamp)
-    } else if (is.raw(v)) {
-      rJava::.jcall(s, "V", "setByte", i, rJava::.jbyte(as.raw(v)[1]))
-    } else {
-      rJava::.jcall(s, "V", "setString", i, as.character(v)[1])
-    }
-  }
-}
-
-#' @rdname SQLServerConnection-class
-#' @importMethodsFrom RJDBC dbSendUpdate
-#' @export
-setMethod("dbSendUpdate", c("SQLServerConnection", "character"),
-  def = function (conn, statement, ..., list = NULL) {
-    # Modified from RJDBC
-    # https://github.com/s-u/RJDBC/blob/1b7ccd4677ea49a93d909d476acf34330275b9ad/R/class.R#L108
-    statement <- as.character(statement)[1L]
-    ## if the statement starts with {call or {?= call then we use CallableStatement
-    if (isTRUE(as.logical(grepl("^\\{(call|\\?= *call)", statement)))) {
-      s <- rJava::.jcall(conn@jc, "Ljava/sql/CallableStatement;", "prepareCall",
-        statement, check=FALSE)
-      .verify.JDBC.result(s, "Unable to execute JDBC callable statement ",
-        statement)
-      on.exit(rJava::.jcall(s, "V", "close")) # same as ORA issue below and #4
-      if (length(list(...))) .fillStatementParameters(s, list(...))
-      if (!is.null(list)) .fillStatementParameters(s, list)
-      r <- rJava::.jcall(s, "Ljava/sql/ResultSet;", "executeQuery", check=FALSE)
-      .verify.JDBC.result(r, "Unable to retrieve JDBC result set for ", statement)
-    } else if (length(list(...)) || length(list)) {
-      ## use prepared statements if there are additional arguments
-      s <- rJava::.jcall(conn@jc, "Ljava/sql/PreparedStatement;",
-        "prepareStatement", statement, check=FALSE)
-      .verify.JDBC.result(s, "Unable to execute JDBC prepared statement ",
-        statement)
-      on.exit(rJava::.jcall(s, "V", "close"))
-      # this will fix issue #4 and http://stackoverflow.com/q/21603660/2161065
-      if (length(list(...))) .fillStatementParameters(s, list(...))
-      if (!is.null(list)) .fillStatementParameters(s, list)
-      rJava::.jcall(s, "I", "executeUpdate", check=FALSE)
-    } else {
-      s <- rJava::.jcall(conn@jc, "Ljava/sql/Statement;", "createStatement")
-      .verify.JDBC.result(s, "Unable to create JDBC statement ", statement)
-      on.exit(rJava::.jcall(s, "V", "close"))
-      # in theory this is not necesary since 's' will go away and be collected, but appearently it may be too late for Oracle (ORA-01000)
-      rJava::.jcall(s, "I", "executeUpdate", as.character(statement)[1],
-        check=FALSE)
-    }
-    x <- rJava::.jgetEx(TRUE)
-    if (!rJava::is.jnull(x)) {
-      stop("execute JDBC update query failed in dbSendUpdate (",
-        rJava::.jcall(x, "S", "getMessage"), ")")
-    }
-  }
-)
-
 #' @rdname SQLServerConnection-class
 #' @export
-setMethod("dbWriteTable", "SQLServerConnection",
-  function (conn, name, value, overwrite = TRUE, append = FALSE) {
-    # Based on RJDBC method:
-    # https://github.com/s-u/RJDBC/blob/1b7ccd4677ea49a93d909d476acf34330275b9ad/R/class.R#L242
-    # However require `value` to be a data frame. No coercion will take place
-    assertthat::assert_that(is.data.frame(value), ncol(value) > 0)
-    # Capture whether auto-commit is enabled on connection
-    # If it is, disable until this function exists, after which it should be
-    # enabled again. Should be disabled to ensure all SQL statements are
-    # committed together rather than separately.
-    # http://docs.oracle.com/javase/tutorial/jdbc/basics/transactions.html
-    ac <- rJava::.jcall(conn@jc, "Z", "getAutoCommit")
-    # Check whether table already exists and needs to be dropped.
-    overwrite <- isTRUE(as.logical(overwrite))
-    append <- if (overwrite) FALSE else isTRUE(as.logical(append))
-    if (dbExistsTable(conn, name)) {
-      msg <- paste0("Table '", name, "' already exists")
-      if (overwrite) dbRemoveTable(conn, name) else if (!append) stop(msg)
-    } else if (append) {
-      stop("Cannot append to a non-existing table '", name, "'")
-    }
-    # Set auto-commit state on exit if necessary.
-    if (ac) {
-      rJava::.jcall(conn@jc, "V", "setAutoCommit", FALSE)
-      on.exit(rJava::.jcall(conn@jc, "V", "setAutoCommit", ac))
-    }
-    # Create / append new table
-    fts <- vapply(value, dbDataType, "character", dbObj=conn, USE.NAMES = FALSE)
-    fdef <- paste(ident(names(value)), fts, collapse = ', ')
-    qname <- ident(name)
-    if (!append) {
-      ct <- paste("CREATE TABLE ", qname, " (", fdef, ")", sep= '')
-      dbSendUpdate(conn, ct)
-    }
-    if (length(value[[1]])) {
-      # Use Prepared Statement.
-      inss <- paste("INSERT INTO ", qname, " VALUES(",
-        paste(rep("?", length(value)), collapse = ','), ")", sep = '')
-      for (j in 1:length(value[[1]])) {
-        dbSendUpdate(conn, inss, list = as.list(value[j, ]))
-      }
-    }
-    if (ac) dbCommit(conn)
-})
-
-#' @rdname SQLServerConnection-class
-#' @export
-setMethod("dbListTables", "SQLServerConnection", function(conn, ...) {
+setMethod("dbListTables", "SQLServerConnection",
+  function(conn, pattern = "%", ...) {
   # Modified from RJDBC:
   # https://github.com/s-u/RJDBC/blob/1b7ccd4677ea49a93d909d476acf34330275b9ad/R/class.R#L161
   md <- rJava::.jcall(conn@jc, "Ljava/sql/DatabaseMetaData;", "getMetaData",
     check = FALSE)
-  .verify.JDBC.result(md, "Unable to retrieve JDBC database metadata")
+  catch_exception(md, "Unable to retrieve JDBC database metadata")
   # Create arguments for call to getTables
   jns <- rJava::.jnull("java/lang/String")
   table_types <- rJava::.jarray(c("TABLE", "VIEW"))
   rs <- rJava::.jcall(md, "Ljava/sql/ResultSet;", "getTables",
-    jns, jns, jns, table_types, check = FALSE)
-  .verify.JDBC.result(rs, "Unable to retrieve JDBC tables list")
+    jns, jns, pattern, table_types, check = FALSE)
+  catch_exception(rs, "Unable to retrieve JDBC tables list")
   on.exit(rJava::.jcall(rs, "V", "close"))
   tbls <- character()
   while (rJava::.jcall(rs, "Z", "next")) {
-    tbls <- c(tbls, rJava::.jcall(rs, "S", "getString", "TABLE_NAME"))
+    schema <- rJava::.jcall(rs, "S", "getString", "TABLE_SCHEM")
+    sys_schemas <- c("sys", "INFORMATION_SCHEMA")
+    if (!(schema %in% sys_schemas)) {
+      tbls <- c(tbls, rJava::.jcall(rs, "S", "getString", "TABLE_NAME"))
+    }
   }
   tbls
 })
@@ -317,140 +289,338 @@ setMethod("dbListTables", "SQLServerConnection", function(conn, ...) {
 #' @rdname SQLServerConnection-class
 #' @export
 setMethod("dbExistsTable", "SQLServerConnection", function (conn, name, ...) {
-  all(name %in% dbListTables(conn))
+  length(dbListTables(conn, name)) > 0
 })
 
-# DBI methods that inherit from RJDBC:
-# dbDisconnect()
-# dbGetException()
-# dbListResults()
-# dbListFields()
-# dbListTables()
-# dbReadTable()
-# dbExistsTable()
-# dbRemoveTable()
-# dbCommit()
-# dbRollback()
+#' @rdname SQLServerConnection-class
+#' @export
+setMethod("dbRemoveTable", "SQLServerConnection", function (conn, name, ...) {
+  assertthat::is.number(dbExecute(conn,
+    paste0("DROP TABLE ", dbQuoteIdentifier(conn, name))))
+})
+
+#' @rdname SQLServerConnection-class
+#' @export
+setMethod("dbBegin", "SQLServerConnection", function (conn, ...) {
+  if (!is_autocommit(conn)) {
+    stop("Cannot begin a nested transaction.", call. = FALSE)
+  }
+  ac <- rJava::.jcall(conn@jc, "V", "setAutoCommit", FALSE, check = FALSE)
+  # http://docs.oracle.com/javase/7/docs/api/java/sql/Connection.html#setAutoCommit(boolean)
+  catch_exception(ac, "You cannot begin a transaction on a closed connection.")
+  TRUE
+})
+
+#' @rdname SQLServerConnection-class
+#' @export
+setMethod("dbCommit", "SQLServerConnection", function (conn, ...) {
+  rJava::.jcall(conn@jc, "V", "commit")
+  rJava::.jcall(conn@jc, "V", "setAutoCommit", TRUE)
+  TRUE
+})
+
+#' @rdname SQLServerConnection-class
+#' @export
+setMethod("dbRollback", "SQLServerConnection", function (conn, ...) {
+  rJava::.jcall(conn@jc, "V", "rollback")
+  TRUE
+})
+
+
+#' @rdname SQLServerConnection-class
+#' @export
+setMethod("dbWriteTable", "SQLServerConnection",
+  function (conn, name, value, row.names = NA, overwrite = FALSE, append = FALSE,
+    field.types = NULL, temporary = FALSE, batch = FALSE) {
+
+    assertthat::assert_that(is.data.frame(value), ncol(value) > 0,
+      !(overwrite && append))
+
+    dbWithTransaction(conn, {
+      found <- dbExistsTable(conn, name)
+      temp <- grepl("^#", name)
+
+      if (found && !append && !overwrite) {
+        stop("The table ", name, " exists but you are not overwriting or ",
+          "appending to this table.", call. = FALSE)
+      }
+
+      if (!found && append) {
+        stop("The table ", name, " does not exist but you are trying to ",
+          "append data to it.")
+      }
+
+      if (temp && append) {
+        stop("Appending to a temporary table is unsupported.")
+      }
+
+      name <- dbQuoteIdentifier(conn, name)
+
+      # NB: if table "name" does not exist, having "overwrite" set to TRUE does
+      # not cause problems, so no need for error handling in this case.
+      # Let server backend handle case when temp table exists but overwriting it
+
+      if ((found || temp) && overwrite) {
+        dbRemoveTable(conn, name)
+      }
+
+      if (!found || temp || overwrite) {
+        dbExecute(conn, sqlCreateTable(conn, name, value))
+      }
+
+      if (nrow(value) > 0) {
+        sql <- sqlAppendTableTemplate(conn, name, value)
+        # looping is now done within dbExecute
+        dbExecute(conn, sql, params = value, batch = batch)
+      }
+    })
+    invisible(TRUE)
+})
+
+setMethod("dbListFields", "SQLServerConnection", function(conn, name, ...) {
+  # Using MSFT recommendation linked here:
+  # https://github.com/imanuelcostigan/RSQLServer/issues/23
+  qry <- paste0("SELECT TOP 0 * FROM ", dbQuoteIdentifier(conn, name))
+  rs <- dbSendQuery(conn, qry)
+  on.exit(dbClearResult(rs))
+  jdbcColumnNames(rs@md)
+})
+
+setMethod("dbListResults", "SQLServerConnection", function(conn, ...) {
+  # https://github.com/s-u/RJDBC/blob/1b7ccd4677ea49a93d909d476acf34330275b9ad/R/class.R#L150
+  warning("JDBC does not maintain a list of active results.")
+  NULL
+})
+
+setMethod("dbGetException", "SQLServerConnection", def = function(conn, ...) {
+  # https://github.com/s-u/RJDBC/blob/1b7ccd4677ea49a93d909d476acf34330275b9ad/R/class.R#L143
+  # Function to be deprecated from DBI: https://github.com/rstats-db/DBI/issues/51
+  list()
+})
+
+
+# Inherited from DBI:
+# show()
+# dbQuoteString()
+# dbQuoteIdentifier()
+
 
 # Results ----------------------------------------------------------------
 
 #' @rdname SQLServerResult-class
 #' @export
 setMethod ('dbIsValid', 'SQLServerResult', function (dbObj) {
-  rJava::.jcall(dbObj@jr, "Z", "isClosed")
+  !rJava::.jcall(dbObj@jr, "Z", "isClosed")
+})
+
+#' @rdname SQLServerResult-class
+#' @export
+setMethod("dbFetch", c("SQLServerPreResult", "numeric"),
+  def = function (res, n, ...) {
+    fetch(res, n, ...)
+})
+
+#' @rdname SQLServerResult-class
+#' @export
+setMethod("fetch", c("SQLServerPreResult", "numeric"),
+  function(res, n, ...) {
+    jr <- execute_query(res@stat)
+    catch_exception(jr, "Unable to retrieve result set for ", res@stat)
+    md <- rs_metadata(jr, FALSE)
+    catch_exception(md, "Unable to retrieve result set meta data for ",
+      res@stat, " in dbSendQuery")
+    rs <- new("SQLServerResult", res, jr = jr, md = md,
+      rows_fetched = RowCounter(count = 0L))
+    fetch(rs, n)
+})
+
+#' @rdname SQLServerResult-class
+#' @export
+setMethod("fetch", c("SQLServerUpdateResult", "numeric"), function(res, n, ...) {
+  data.frame()
+})
+
+#' @param batch logical, indicates whether uploads (e.g., 'INSERT' or
+#'   'UPDATE') should be uploaded in batches, potentially much faster
+#'   than by individual rows (the default). (Setting it here enabled
+#'   binding the variables in batches, the actual batched upload is
+#'   done in \code{\link{dbSendStatement}} or
+#'   \code{\link{dbExecute}}.)
+#' @rdname SQLServerResult-class
+#' @export
+setMethod("dbBind", "SQLServerPreResult", function(res, params, ..., batch = FALSE) {
+  rs_bind_all(params, res, batch = batch)
+})
+
+#' @rdname SQLServerResult-class
+#' @export
+setMethod("dbFetch", c("SQLServerResult", "numeric"),
+  def = function (res, n, ...) {
+    fetch(res, n, ...)
 })
 
 #' @rdname SQLServerResult-class
 #' @export
 setMethod("fetch", c("SQLServerResult", "numeric"),
-  def = function (res, n, ...) {
-    # Needed because dplyr's Query class calls the S4 fetch method when it calls
-    # its R6 fetch method. See:
-    # https://github.com/hadley/dplyr/blob/db2f59ce3a0732c81a4fde2b60b06c048eaf1291/R/query.r#L44
-    df <- callNextMethod()
+  function(res, n = -1, block = 2048L, ...) {
+    # Based on:
+    # https://github.com/s-u/RJDBC/blob/1b7ccd4677ea49a93d909d476acf34330275b9ad/R/class.R#L287
+    assertthat::assert_that(assertthat::is.count(block))
 
-    ####
-    # RJDBC translates SQL Server fields to numeric and character vectors only.
-    # This means that for eg, date fields types are represented by character
-    # vectors. A bit of post-processing will be good. At some point should
-    # file a bug report to RJDBC about this.
-    ####
-    # Assume that RJDBC doesn't change column order in fetching result
-    # First find JDBC column types and turn them into R types
-    rcts <- jdbcToRType(jdbcColumnTypes(res@md))
-    # Check which columns need conversion
-    df_cts <- vapply(df, class, "character", USE.NAMES = FALSE)
-    to_convert <- rcts != df_cts
-    # Conversion time
-    if (any(to_convert)) {
-      cnames <- colnames(df)
-      names(rcts) <- cnames
-      for (cname in cnames[to_convert]) {
-        # special case for bit columns,
-        # which become character vectors of "0" and "1"
-        if (rcts[cname] == "logical") {
-          df[, cname] <- as.logical(as.numeric(df[, cname]))
-        } else {
-          f <- paste0("as.", unname(rcts[cname]))
-          df[, cname] <- eval(call(f, df[, cname]))
-        }
+    ###### Initialise JVM side cache of results
+    rp <- res@pull
+    rJava::.jaddClassPath(pull_class_path())
+    if (rJava::is.jnull(rp)) {
+      rp <- rJava::.jnew("com/github/RSQLServer/MSSQLResultPull",
+        rJava::.jcast(res@jr, "java/sql/ResultSet"))
+      catch_exception(rp, "cannot instantiate MSSQLResultPull helper class")
+    }
+
+    ###### Build list that will store data and be coerced into data frame
+    # Field type integers are defined in MSSQLResultPull class
+    # constant ints CT_STRING, CT_NUMERIC and CT_INT where:
+    # 0L - string
+    # 1L - double
+    # 2L - integer
+    # 3L - date
+    # 4L - datetime/timestamp
+    ctypes <- rJava::.jcall(rp, "[I", "mapColumns")
+    cnames <- rJava::.jcall(rp, "[S", "columnNames")
+    ctypes_r <- rp_to_r_type_map(ctypes)
+    out <- create_empty_lst(ctypes_r, cnames)
+
+    ###### Fetch into cache and pull from cache into R
+    rows_fetched <- 0L
+    if (n < 0L) { ## infinite pull
+      # stride - set capacity of cache. Start fairly small to support tiny
+      # queries and increase later block - set fetch size which gives driver
+      # hint as to # rows to be fetched
+      stride <- 32768L
+      while ((nrec <- rJava::.jcall(rp, "I", "fetch", stride, block)) > 0L) {
+        out <- fetch_rp(rp, out, ctypes)
+        rows_fetched <- rows_fetched + nrec
+        if (nrec < stride) break
+        stride <- 524288L # 512k
       }
     }
-    df
+    if (n > 0L) {
+      rows_fetched <- rJava::.jcall(rp, "I", "fetch", as.integer(n), block)
+      out <- fetch_rp(rp, out, ctypes)
+    }
+    # n = 0 is taken care of by creation of `out` list variable above.
+    if (length(out[[1]]) > 0) {
+      out <- purrr::map_if(out, ctypes == 3L, as.Date,
+        format = "%Y-%m-%d")
+      out <- purrr::map_if(out, ctypes == 4L, as.POSIXct,
+        tz = "UTC", format = "%Y-%m-%d %H:%M:%OS")
+      out <- purrr::map_if(out, ctypes == 5L, as.logical)
+    }
+    # as.data.frame is expensive - create it on the fly from the list
+    attr(out, "row.names") <- c(NA_integer_, length(out[[1]]))
+    class(out) <- "data.frame"
+    # Update row count of ResultSet object. Using a RC object so that
+    # we can update reference value
+    res@rows_fetched$add(rows_fetched)
+    out
 })
 
 #' @rdname SQLServerResult-class
-#' @export
-setMethod("dbFetch", c("SQLServerResult", "numeric"), function(res, n, ...) {
-  # Per DBI documentation:
-  # "fetch is provided for compatibility with older DBI clients - for all new
-  # code you are strongly encouraged to use dbFetch."
-  # RJDBC does not currently have a dbFetch method.
-  fetch(res, n, ...)
-})
-
-#' @rdname SQLServerResult-class
-#' @export
-setMethod("dbGetInfo", "SQLServerResult", def = function (dbObj, ...) {
-  list(statement = dbObj@stat,
-    row.count = rJava::.jcall(dbObj@jr, "I", "getRow"),
-    rows.affected = rJava::.jcall(dbObj@jr, "I", "getFetchSize"),
-    # http://docs.oracle.com/javase/7/docs/api/java/sql/ResultSet.html#isAfterLast()
-    has.completed = rJava::.jcall(dbObj@jr, "Z", "isAfterLast"),
-    # No JDBC method is available that determines whether statement is a
-    # SELECT
-    is.select = NA)
-})
-
-#' @rdname SQLServerResult-class
-#' @importFrom dplyr data_frame
+#' @importFrom dplyr bind_rows data_frame
 #' @export
 setMethod("dbColumnInfo", "SQLServerResult", def = function (res, ...) {
   # Inspired by RJDBC method for JDBCResult
   # https://github.com/s-u/RJDBC/blob/1b7ccd4677ea49a93d909d476acf34330275b9ad/R/class.R
   cols <- rJava::.jcall(res@md, "I", "getColumnCount")
-  df <- data_frame(field.name = character(),
-    field.type = character(),
-    data.type = character())
-  if (cols < 1) return(df)
-  for (i in 1:cols) {
-    df$field.name[i] <- rJava::.jcall(res@md, "S", "getColumnName", i)
-    df$field.type[i] <- rJava::.jcall(res@md, "S", "getColumnTypeName", i)
-    ct <- rJava::.jcall(res@md, "I", "getColumnType", i)
-    df$data.type[i] <- jdbcToRType(ct)
+  if (cols < 1L) {
+    df <- data_frame(field.name = character(),
+                     field.type = character(),
+                     data.type = character())
+  } else {
+    df <- dplyr::bind_rows(
+      lapply(seq_len(cols), function(i) {
+        list(field.name = rJava::.jcall(res@md, "S", "getColumnName", i),
+             field.type = rJava::.jcall(res@md, "S", "getColumnTypeName", i),
+             data.type = jdbcToRType(rJava::.jcall(res@md, "I", "getColumnType", i)))
+      })
+    )
   }
   df
 })
 
 #' @rdname SQLServerResult-class
 #' @export
-setMethod("dbHasCompleted", "SQLServerResult", def = function (res, ...) {
-  # Need to override RJDBC method as it always returns TRUE
-  dbGetInfo(res)$has.completed
+setMethod("dbClearResult", "SQLServerResult", function (res, ...) {
+  # Need to overwrite RJDBC supplied method to pass DBItest. Needs to throw
+  # warning if calling this method on cleared resultset
+  if (!dbIsValid(res)) {
+    warning("ResultSet has already been cleared", call. = FALSE)
+  } else {
+    rJava::.jcall(res@jr, "V", "close")
+  }
+  if (rJava::.jcall(res@stat, "Z", "isClosed")) {
+    warning("Statement has already been cleared", call. = FALSE)
+  } else {
+    close_statement(res@stat)
+  }
+  TRUE
 })
 
 
+#' @rdname SQLServerResult-class
+#' @export
+setMethod("dbGetStatement", "SQLServerResult", function(res, ...) {
+  rJava::.jcall(res@stat, "S", "toString")
+})
+
+#' @rdname SQLServerResult-class
+#' @export
+setMethod("dbGetRowCount", "SQLServerResult", function(res, ...) {
+  as.numeric(res@rows_fetched$field("count"))
+})
+
+#' @rdname SQLServerResult-class
+#' @export
+setMethod("dbGetRowsAffected", "SQLServerResult", function(res, ...) {
+  # SELECT queries should return 0
+  # dbGetRowsAffected(SQLServerUpdateResult) will handle data manipulation
+  # statements
+  0
+})
+
+#' @rdname SQLServerResult-class
+#' @export
+setMethod("dbGetRowsAffected", "SQLServerUpdateResult", function(res, ...) {
+  res@rows_affected
+})
+
+#' @rdname SQLServerResult-class
+#' @export
+setMethod("dbHasCompleted", "SQLServerResult", function(res, ...) {
+  # JDBC isAfterLast method returns FALSE for empty ResultSets even after
+  # fetch called on ResultSet. Counting rows requires moving cursor back and
+  # forth which is inefficient and unlikely as default statement has cursor
+  # moving forward only. Need to use a different approach to working out
+  # whether rs is empty.
+  is_before_first <- rJava::.jcall(res@jr, "Z", "isBeforeFirst")
+  is_after_last <- rJava::.jcall(res@jr, "Z", "isAfterLast")
+  is_no_row <- rJava::.jcall(res@jr, "I", "getRow") == 0
+  is_after_last ||
+    # Is empty resultset?
+    (is_no_row && !is_before_first && !is_after_last)
+  # Empty
+  #   false || (true && true && true) -> true
+  # Non-empty:
+  #   Before first: false || (true && false && true) -> false
+  #   ^^Between first and last: false || (false && true && true) -> false
+  #   After last: true || ... -> true
+})
+
+#' @rdname SQLServerResult-class
+#' @export
+setMethod("dbHasCompleted", "SQLServerUpdateResult", function(res, ...) {
+  TRUE
+})
+
 # Inherited from DBI:
 # show()
-# dbGetStatement()
-# dbGetRowsAffected()
-# dbGetRowCount()
-#
-# Inherited from RJDBC:
-# fetch()
-# dbClearResult()
 # dbGetInfo()
-
-# Other ----------------------------------------------------------------
-
-.verify.JDBC.result <- function (result, ...) {
-  # Copied from RJDBC:
-  # https://github.com/s-u/RJDBC/blob/1b7ccd4677ea49a93d909d476acf34330275b9ad/R/class.R#L18
-  if (rJava::is.jnull(result)) {
-    x <- rJava::.jgetEx(TRUE)
-    if (rJava::is.jnull(x))
-      stop(...)
-    else
-      stop(..., " (", rJava::.jcall(x, "S", "getMessage"), ")")
-  }
-}

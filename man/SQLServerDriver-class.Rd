@@ -4,19 +4,20 @@
 \name{SQLServerDriver-class}
 \alias{SQLServerDriver-class}
 \alias{dbGetInfo,SQLServerDriver-method}
-\alias{show,SQLServerDriver-method}
-\title{An S4 class to represent a SQL Server driver}
+\alias{dbUnloadDriver,SQLServerDriver-method}
+\alias{dbIsValid,SQLServerDriver-method}
+\title{SQL Server Driver class}
 \usage{
 \S4method{dbGetInfo}{SQLServerDriver}(dbObj, ...)
 
-\S4method{show}{SQLServerDriver}(object)
+\S4method{dbUnloadDriver}{SQLServerDriver}(drv, ...)
+
+\S4method{dbIsValid}{SQLServerDriver}(dbObj, ...)
 }
 \description{
-Extends the \code{\link[RJDBC:JDBCDriver-class]{JDBCDriver}} class and
-uses jTDS driver.
+SQL Server Driver class
 }
 \seealso{
 \code{\link{SQLServer}}
 }
 \keyword{internal}
-

@@ -21,7 +21,7 @@ the \code{file} does not contain the \code{server} key
 }
 \description{
 The \code{sql.yaml} file in a user's \code{HOME} directory can store
-server details and login credentials (in plaintext). This works around
+server details and login credentials (in plain text). This works around
 the instability associated with jTDS's single-sign on functionality.
 The YAML file format is documented in this package's \code{README} file, while
 an example is provided in \code{extdata/sql.yaml} (see example). At a
@@ -30,10 +30,12 @@ with each aspect of the server documented in an associative array.
 }
 \examples{
 # See link below
+\dontrun{
 aw <- dbConnect(RSQLServer::SQLServer(), server = "mhknbn2kdz.database.windows.net",
  database = 'AdventureWorks2012',
  properties = list(user = "sqlfamily", password = "sqlf@m1ly"))
 dbListTables(aw)
+}
 }
 \seealso{
 \href{https://github.com/imanuelcostigan/RSQLServer/blob/master/README.md}{RSQLServer README}
@@ -41,4 +43,3 @@ dbListTables(aw)
 \href{http://sqlblog.com/blogs/jamie_thomson/archive/2012/03/27/adventureworks2012-now-available-to-all-on-sql-azure.aspx}{Example SQL Server instance}
 }
 \keyword{internal}
-
